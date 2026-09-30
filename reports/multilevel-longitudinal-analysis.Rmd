@@ -1,0 +1,121 @@
+---
+title: "Multilevel analysis warm-up: sleepstudy"
+author: "Umut Can Vural"
+date: "2026-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Create the folder structure
+
+```{r folder-structure}
+#Create the folder structure
+
+#dirs <- c("data", "scripts", "reports", "results", "config")
+#for (d in dirs) dir.create(d, showWarnings = FALSE)
+
+# keep empty folders visible to Git
+#for (d in c("data", "results")) file.create(file.path(d, ".gitkeep"))
+
+```
+
+## Required packages
+
+- **tidyverse**: Provides tools for importing, cleaning, transforming, summarising, and visualising tabular data, including `dplyr`, `readr`, `tidyr`, and `ggplot2`.
+
+- **lme4**: Fits linear and generalized linear mixed-effects models, including random intercepts and random slopes.
+
+- **rmarkdown**: Renders the analysis, code, figures, and written interpretation into a reproducible HTML report.
+
+- **knitr**: Executes R code chunks and formats code, tables, figures, and output inside the R Markdown report.
+
+- **lmerTest**: Adds p-values to lmer models
+
+- **performance**: Provides ICC and model diagnostics.
+
+```{r packages}
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+library(performance)
+```
+
+## The sleepstudy warm-up
+
+```{r inspection}
+
+data(sleepstudy)
+glimpse(sleepstudy)
+
+# Look at the data first: one line per person
+ggplot(sleepstudy, aes(Days, Reaction, group = Subject, colour = Subject)) +
+  geom_line(alpha = 0.9, linewidth = 0.8) +
+  labs(title = "Reaction time over days of sleep deprivation",
+       x = "Days", y = "Reaction time (ms)") +
+  theme(legend.position = "none")
+
+#before I use any predictor, how much do people differ from each other, compared with how much one person varies from measurement to measurement?
+m_null <- lmer(Reaction ~ 1 + (1 | Subject), data = sleepstudy)
+icc(m_null)
+
+# Model 1: ordinary regression (ignores that measurements come from the same people)
+# Reaction time gets slower per day
+m0 <- lm(Reaction ~ Days, data = sleepstudy)
+
+# Model 2: each person has their own baseline
+# Everyone starts at a different level, but everyone gets slower at the same rate. 
+m1 <- lmer(Reaction ~ Days + (1 | Subject), data = sleepstudy)
+
+# Model 3: each person has their own baseline AND their own slope over time
+# Everyone starts at a different level, and everyone gets slower at their own rate
+m2 <- lmer(Reaction ~ Days + (Days | Subject), data = sleepstudy)
+
+summary(m0)
+summary(m1)
+icc(m1)
+summary(m2)
+icc(m2)
+
+
+# Likelihood-ratio test:
+# Does m2 fit enough better to justify being more complicated?
+anova(m1, m2)
+
+```
+
+### Model m0: ordinary regression
+
+The average reaction time(RT) on day 0 is about **251 ms** (intercept). On average, RT gets about **10.5 ms** slower for each extra day of sleep deprivation (Days).
+
+Individual observations scatter around the line by roughly **48 ms** (residual standard error, RSE), and the model explains about **29%** of the variance (R²).
+
+The model assumes all 180 rows are independent, but they are 10 measurements from each of 18 people. The degrees of freedom(DoF) (**178**) are therefore too high, and the significance test is not trustworthy.
+
+### Model m1: random intercept
+
+The average RT on day 0 is still about **251 ms**, and the Days slope is still about **10.5 ms** per day. The standard error(St.E) of Days dropped from **1.238** to **0.804**.
+
+People's baseline RT differ from the average by about **37 ms** (SD of the random intercept). The scatter of one person's measurements around their own line is about **31 ms** (residual SD).
+
+Intraclass correlation coefficient (ICC) is **0.59** About **59%** of the variation in RT during these days is due to stable differences between people, and **41%** is variation within a person.
+
+### Model m2: random intercept and random slope
+
+The average slope is unchanged **10.5 ms**, but its standard error almost doubled **1.546**. In m1 we assumed everyone slows down at the same rate, which made the slope look more certain than it is. In m2, people are allowed to differ in their slopes, and the average slope is really estimated from 18 different people.
+
+People's baseline RT differ from the average by about **25 ms** (SD of the random intercept). The scatter of one person's measurements around their own line is about **25.6 ms** (residual SD). People's slopes vary around the average of **10.5 ms/day** by about **5.9 ms/day.** The correlation between a person's baseline and their slope is essentially zero.
+
+Intraclass correlation coefficient (ICC) is **0.72** About **72%** of the variation in RT during these days is due to stable differences between people, and **28%** is variation within a person. The between-person variance now depends on which day you look at, so the ICC changes over time.
+
+### Null model and ICC
+
+In the null model (no predictors, random intercept only), the intraclass correlation coefficient (ICC) is **0.40**. About **40%** of the total variance in reaction time is due to stable differences between people, and about **60%** is variation within a person. This justifies a multilevel approach.
+
+### Model comparison
+
+`anova(m1, m2)` is a likelihood-ratio test. It asks whether the more complex model (m2, random slopes) fits enough better than the simpler one (m1) to justify the extra parameters. AIC and BIC combine fit and complexity, and lower values are better.
+
+Adding a random slope for Days improved the model substantially (AIC 1802.1 to 1763.9; χ²(2) = 42.1, p \< .001). People differ not only in their baseline reaction time but also in how quickly they slow down, so m2 is the preferred model.
