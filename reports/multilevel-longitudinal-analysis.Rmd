@@ -36,14 +36,17 @@ knitr::opts_chunk$set(echo = TRUE)
 
 - **performance**: Provides ICC and model diagnostics.
 
+- **performance**: Builts path from project root to files, so that the code works on any computer.
+
 ```{r packages}
 library(lme4)
 library(lmerTest)
 library(tidyverse)
 library(performance)
+library(here)
 ```
 
-## The sleepstudy warm-up
+## 01 The sleepstudy warm-up
 
 ```{r inspection}
 
@@ -119,3 +122,112 @@ In the null model (no predictors, random intercept only), the intraclass correla
 `anova(m1, m2)` is a likelihood-ratio test. It asks whether the more complex model (m2, random slopes) fits enough better than the simpler one (m1) to justify the extra parameters. AIC and BIC combine fit and complexity, and lower values are better.
 
 Adding a random slope for Days improved the model substantially (AIC 1802.1 to 1763.9; χ²(2) = 42.1, p \< .001). People differ not only in their baseline reaction time but also in how quickly they slow down, so m2 is the preferred model.
+
+## 02 Stimulate Fake Data
+
+We simulate data from 120 older adults who complete a Digital Skills Test Measure (DSTM) at baseline (0 months), 3 months, and 6 months. Participants are assigned to either a Control group or a Training group. The Training group plays digital games daily as part of a digital-skills intervention, whereas the Control group does not.
+
+The research question is whether the Training group improves more over time than the Control group. The main effect of interest is therefore the time-by-group interaction.
+
+Both groups have the same average baseline score of 40 points. The Control group improves by 0.5 points per month. The Training group improves by an additional 1.0 point per month, for a total average improvement of 1.5 points per month.
+
+Participants differ in their initial DSTM scores (sd_intercept) and individual rates of change (sd_slope). Each observed score also includes occasion-specific measurement error (sd_resid): variation around that participant’s expected score at a specific assessment.
+
+This is a 2 × 3 mixed design:
+
+Between-participants factor: Group (Control vs. Training)
+
+Within-participants factor: Time (0, 3, and 6 months)
+
+Outcome: DSTM score
+
+The simulated random intercepts, random slopes, and residual errors are assumed to be approximately normally distributed. This assumption is part of the data-generating model and is not an application of the central limit theorem.
+
+Finally, we fit a linear mixed-effects model using lmer() to check whether it recovers the values used to generate the data. We will later estimate power by simulating the study many times, testing the time-by-group interaction in each simulation, and calculating the proportion of significant results. We can compare power across sample sizes such N=60, N=120 and N=200, or across different intervention-effect sizes.
+
+
+```{r stimulate-data}
+set.seed(123456)  # makes the "random" data identical every run
+
+# ---- Step 1. TRUE VALUES ----
+# Choose the true values (averages, differences between people, noise)
+# Sample and measurement occasions
+n_participants <- 120
+time_months <- c(0, 3, 6)
+
+# Fixed effects
+b0 <- 40          # Mean baseline DSTM score in the Control group
+b_time <- 0.5     # Mean monthly DSTM change in the Control group
+b_group <- 0      # Baseline difference: Training minus Control
+b_time_gr <- 1.0  # Additional monthly change in the Training group
+
+# Random effects and residual error
+sd_intercept <- 8 # Between-person SD in baseline DSTM scores
+sd_slope <- 0.5   # Between-person SD in monthly change rates
+sd_resid <- 3     # Within-person measurement error at each occasion
+
+# ---- 2. LEVEL 2: one row per person ----
+people <- tibble(
+  participant_id = sprintf("P%03d", 1:n_participants),
+  intervention   = rep(c("Control", "Training"), each = n_participants / 2),
+  u0 = rnorm(n_participants, 0, sd_intercept),  # this person's baseline deviation
+  u1 = rnorm(n_participants, 0, sd_slope)       # this person's slope deviation
+)
+
+# ---- 3. LEVEL 1: one row per person per time point ----
+sim_data <- people |>
+  crossing(time_months = time_months) |>        # every person gets every time point
+  mutate(
+    training = as.numeric(intervention == "Training"),
+    digital_skills = b0 + u0 +                                  # baseline + person deviation
+      (b_time + u1) * time_months +                             # person's own slope
+      b_group * training +
+      b_time_gr * training * time_months +                      # intervention effect on change
+      rnorm(n(), 0, sd_resid)                                   # noise
+  ) |>
+  select(participant_id, intervention, time_months, digital_skills) |>
+  arrange(participant_id, time_months)
+
+# ---- 4. SAVE ----
+write_csv(sim_data, here("data", "simulated_digital_skills_longitudinal.csv"))
+glimpse(sim_data)
+
+#Note that u0 and u1 are the random effects: this is where "each person has their own baseline and slope" is built into the data. The random-effect part of lmer tries to recover these.
+
+#Check: does lmer recover the truth?
+
+#Create a second script scripts/02_check_recovery.R:
+
+DTSM_data <- read_csv(here("data", "simulated_digital_skills_longitudinal.csv")) |>
+  mutate(intervention = factor(intervention, levels = c("Control", "Training")))
+
+# Each person has their own baseline and their own rate of change over time
+# Estimate how large the effect of the intervention is on the rate of change over time
+m <- lmer(digital_skills ~ time_months * intervention + (time_months | participant_id),
+          data = DTSM_data)
+summary(m)
+```
+
+
+# Fixed effects: truth vs estimate
+
+The model recovered the simulated values well: every estimate was within about one standard error of its true value. The key interaction was significant **(𝑝=9.5×10−9)**. The Training group’s estimated total monthly improvement was **0.58+0.96=1.540** points, close to the true value of **1.5**.
+The interaction’s approximate **95%** CI was **[0.65,1.26]**, which includes the true simulated effect of 1.0.
+
+# Random effects: truth vs estimate
+
+The model recovered the simulated random-effect values well.
+
+The estimated variability in baseline scores, individual change rates, and measurement error was close to the true simulated values. The intercept–slope correlation of **0.12** is close to the true value of zero and is imprecise because each participant has only three measurements.
+
+The degrees of freedom are about **118** because the group comparison is based mainly on **120** participants, not on all **360** observations. One simulation is only one random sample; power requires repeating the simulation many times and calculating how often the intervention-by-time effect is detected.
+
+
+Next steps
+Plot first: a spaghetti plot of individual lines coloured by group, plus the group means. This shows the story that the numbers describe.
+Add confint(m) to get confidence intervals for all parameters, including the random effects.
+Diagnostics: residual plot and Q-Q plot, to check the normality assumption (which holds here by design).
+Model comparison: compare (1 | participant_id) with (time_months | participant_id), as in the warm-up. Note that our slope SD is only 0.5 with 3 time points, so the test may be less clear-cut than in sleepstudy.
+
+
+
