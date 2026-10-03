@@ -36,7 +36,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 - **performance**: Provides ICC and model diagnostics.
 
-- **performance**: Builts path from project root to files, so that the code works on any computer.
+- **here**: Builts path from project root to files, so that the code works on any computer.
+
+- **ggplot2**: Visualisation
 
 ```{r packages}
 library(lme4)
@@ -44,6 +46,8 @@ library(lmerTest)
 library(tidyverse)
 library(performance)
 library(here)
+#library(dplyr))
+library(ggplot2)
 ```
 
 ## 01 The sleepstudy warm-up
@@ -145,9 +149,8 @@ The simulated random intercepts, random slopes, and residual errors are assumed 
 
 Finally, we fit a linear mixed-effects model using lmer() to check whether it recovers the values used to generate the data. We will later estimate power by simulating the study many times, testing the time-by-group interaction in each simulation, and calculating the proportion of significant results. We can compare power across sample sizes such N=60, N=120 and N=200, or across different intervention-effect sizes.
 
-
-```{r stimulate-data}
-set.seed(123456)  # makes the "random" data identical every run
+```{r stimulate-and-spaghetti-plot-data}
+set.seed(2026)  # makes the "random" data identical every run
 
 # ---- Step 1. TRUE VALUES ----
 # Choose the true values (averages, differences between people, noise)
@@ -190,44 +193,157 @@ sim_data <- people |>
 
 # ---- 4. SAVE ----
 write_csv(sim_data, here("data", "simulated_digital_skills_longitudinal.csv"))
-glimpse(sim_data)
 
-#Note that u0 and u1 are the random effects: this is where "each person has their own baseline and slope" is built into the data. The random-effect part of lmer tries to recover these.
+# ---- 5. GLIMPSE ----
 
-#Check: does lmer recover the truth?
-
-#Create a second script scripts/02_check_recovery.R:
-
-DTSM_data <- read_csv(here("data", "simulated_digital_skills_longitudinal.csv")) |>
+DSTM_data <- read_csv(here("data", "simulated_digital_skills_longitudinal.csv")) |>
   mutate(intervention = factor(intervention, levels = c("Control", "Training")))
+
+# Check dimensions and variable types
+glimpse(DSTM_data)
+
+# Check whether scores are missing
+summary(DSTM_data$digital_skills)
+sum(is.na(DSTM_data$digital_skills))
+
+# Check whether group and time exist
+table(DSTM_data$intervention, useNA = "ifany")
+table(DSTM_data$time_months, useNA = "ifany")
+
+
+# Group means at each measurement occasion
+group_means <- DSTM_data %>%
+  group_by(intervention, time_months) %>%
+  summarise(
+    mean_DSTM = mean(digital_skills),
+    .groups = "drop"
+  )
+
+# Inspect the calculated group means
+#group_means
+
+# ---- 6. PLOT ----
+
+ggplot(DSTM_data,
+       aes(x = time_months,
+           y = digital_skills,
+           group = participant_id,
+           colour = intervention)) +
+  geom_line(alpha = 0.20, linewidth = 0.5) +
+  geom_point(alpha = 0.30, size = 1.4) +
+  geom_line(
+    data = group_means,
+    aes(x = time_months,
+        y = mean_DSTM,
+        group = intervention,
+        colour = intervention),
+    inherit.aes = FALSE,
+    linewidth = 1.4
+  ) +
+  geom_point(
+    data = group_means,
+    aes(x = time_months,
+        y = mean_DSTM,
+        colour = intervention),
+    inherit.aes = FALSE,
+    size = 3
+  ) +
+  scale_x_continuous(breaks = c(0, 3, 6)) +
+  labs(
+    title = "Individual DSTM trajectories by intervention group",
+    subtitle = "Thin lines show participants; thick lines show observed group means",
+    x = "Months since baseline",
+    y = "DSTM score",
+    colour = "Group"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+
+# ---- 7. MODEL ----
+
 
 # Each person has their own baseline and their own rate of change over time
 # Estimate how large the effect of the intervention is on the rate of change over time
 m <- lmer(digital_skills ~ time_months * intervention + (time_months | participant_id),
-          data = DTSM_data)
+          data = DSTM_data)
 summary(m)
-```
 
+#confidence intervals for the fixed effects
+#confint(m)
+confint(m, parm = "beta_", method = "Wald")
+```
 
 # Fixed effects: truth vs estimate
 
 The model recovered the simulated values well: every estimate was within about one standard error of its true value. The key interaction was significant **(𝑝=9.5×10−9)**. The Training group’s estimated total monthly improvement was **0.58+0.96=1.540** points, close to the true value of **1.5**.
-The interaction’s approximate **95%** CI was **[0.65,1.26]**, which includes the true simulated effect of 1.0.
+
+Training participants improved faster than Control participants (time × group: **0.83** points per month, **95%** CI **[0.56, 1.11]**). Between-person SDs were **8.1 (95% CI [7.0, 9.3])** for baseline and about 0.4 for monthly change **(95% CI [0.00, 0.49])**; residual SD was **3.1 (95% CI [2.8, 3.5])**.
 
 # Random effects: truth vs estimate
 
 The model recovered the simulated random-effect values well.
 
+$u_{0i}$: how much person $i$'s baseline differs from the average baseline.
+
+$u_{1i}$: how much person $i$'s monthly change differs from the average monthly change.
+
 The estimated variability in baseline scores, individual change rates, and measurement error was close to the true simulated values. The intercept–slope correlation of **0.12** is close to the true value of zero and is imprecise because each participant has only three measurements.
 
 The degrees of freedom are about **118** because the group comparison is based mainly on **120** participants, not on all **360** observations. One simulation is only one random sample; power requires repeating the simulation many times and calculating how often the intervention-by-time effect is detected.
 
+# Does the random slope earn its place?
 
-Next steps
-Plot first: a spaghetti plot of individual lines coloured by group, plus the group means. This shows the story that the numbers describe.
-Add confint(m) to get confidence intervals for all parameters, including the random effects.
-Diagnostics: residual plot and Q-Q plot, to check the normality assumption (which holds here by design).
-Model comparison: compare (1 | participant_id) with (time_months | participant_id), as in the warm-up. Note that our slope SD is only 0.5 with 3 time points, so the test may be less clear-cut than in sleepstudy.
+The interval for the slope SD (0.00 to 0.49) was close to zero, so the question is a real one here
+
+```{r model-comparison}
+# Simpler model: each person has their own baseline, but everyone shares the same rate of change
+m_ri <- lmer(digital_skills ~ time_months * intervention + (1 | participant_id),
+             data = DSTM_data)
+
+# Full model (m): own baseline AND own rate of change , with the correlation estimated.
+# m <- lmer(digital_skills ~ time_months * intervention + (time_months | participant_id), data = DSTM_data)
+
+anova(m_ri, m)
+
+# iddle midel: each person has their own baseline AND their own rate of change, but the correlation is fixed at zero
+
+m_unc <- lmer(digital_skills ~ time_months * intervention + (1 | participant_id) + (0 + time_months | participant_id),
+              data = DSTM_data)
+
+anova(m_ri, m_unc, m)
 
 
+summary(m_ri)$coefficients
+summary(m)$coefficients
+```
 
+A random-intercept model was retained: adding random slopes for time did not improve the fit (χ²(2) = 0.34, p = .845; AIC 2235.7 vs 2239.3). The time × group estimate was identical in both mo
+dels (0.83 points per month), with a very similar SE (0.139 vs 0.141). With only three measurements per person, the data provide little information about individual differences in change.
+
+Coefficents estimate and SE are almost identical, the choice has little effect on our conclusion.
+
+
+## Diagnostics:
+
+Residual plot and Q-Q plot, to check the normality assumption (which holds here by design).
+
+
+```{r diagnostics}
+plot(m)                              # residuals vs fitted: look for a flat, even cloud
+qqnorm(resid(m)); qqline(resid(m))   # residual normality
+qqnorm(ranef(m)$participant_id[, 1]) # random-intercept normality
+performance::check_model(m)          # all of these in one panel
+```
+## Coefficent Compariosn
+
+```{r diagnostics}
+plot(m_ri)
+qqnorm(resid(m_ri)); qqline(resid(m_ri))
+performance::check_model(m_ri)
+```
+
+
+Model comparison: compare (1 \| participant_id) with (time_months \| participant_id), as in the warm-up. Note that our slope SD is only 0.5 with 3 time points, so the test may be less clear-cut than in sleepstudy.
