@@ -14,15 +14,9 @@ output:
 This document demonstrates a complete workflow for multilevel (mixed-effects) modelling and simulation-based power analysis in R. It uses the `sleepstudy` dataset as a warm-up, then simulates a 2 × 3 longitudinal intervention study (digital-skills training in older adults). The same code structure can be adapted to other repeated-measures designs and outcomes.
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
 ```
 
-## Create the folder structure
-
-```{r folder-structure}
-#Create the folder structure
-#dir.create("data", showWarnings = FALSE)
-```
 
 ## Required packages
 
@@ -40,6 +34,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 **purrr**: Provides functional programming tools (e.g., map_dfr) for iteration and simulation.
 
+**see**: Enhances visualization of mixed models and diagnostics.
+
+
 ```{r packages}
 library(lme4)
 library(lmerTest)
@@ -48,6 +45,7 @@ library(performance)
 library(here)
 library(ggplot2)
 library(purrr)
+library(see)
 ```
 
 ## 01 The sleepstudy warm-up
@@ -68,15 +66,15 @@ ggplot(sleepstudy, aes(Days, Reaction, group = Subject, colour = Subject)) +
 m_null <- lmer(Reaction ~ 1 + (1 | Subject), data = sleepstudy)
 icc(m_null)
 
-# Model 1: ordinary regression (ignores that measurements come from the same people)
+# m0: ordinary regression (ignores that measurements come from the same people)
 # Reaction time gets slower per day
 m0 <- lm(Reaction ~ Days, data = sleepstudy)
 
-# Model 2: each person has their own baseline
+# m1: each person has their own baseline
 # Everyone starts at a different level, but everyone gets slower at the same rate. 
 m1 <- lmer(Reaction ~ Days + (1 | Subject), data = sleepstudy)
 
-# Model 3: each person has their own baseline AND their own slope over time
+# m2: each person has their own baseline AND their own slope over time
 # Everyone starts at a different level, and everyone gets slower at their own rate
 m2 <- lmer(Reaction ~ Days + (Days | Subject), data = sleepstudy)
 
@@ -86,11 +84,9 @@ icc(m1)
 summary(m2)
 icc(m2)
 
-
 # Likelihood-ratio test:
 # Does m2 fit enough better to justify being more complicated?
 anova(m1, m2)
-
 ```
 
 ### Model m0: ordinary regression
@@ -153,7 +149,7 @@ The simulated random intercepts, random slopes, and residual errors are assumed 
 
 Finally, we fit a linear mixed-effects model using lmer() to check whether it recovers the values used to generate the data. We will later estimate power by simulating the study many times, testing the time-by-group interaction in each simulation, and calculating the proportion of significant results. We can compare power across sample sizes such N=60, N=120 and N=200, or across different intervention-effect sizes.
 
-```{r stimulate-and-spaghetti-plot-data}
+```{r simulate-and-spaghetti-plot-data}
 set.seed(2026)  # makes the "random" data identical every run
 
 # ---- Step 1. TRUE VALUES ----
@@ -228,8 +224,6 @@ group_means <- DSTM_data %>%
 # Inspect the calculated group means
 #group_means
 
-
-
 # ---- 6. PLOT ----
 # Does the simulated dataset visually resemble the world I intended to simulate?
 ggplot(DSTM_data,
@@ -271,8 +265,6 @@ ggplot(DSTM_data,
   )
 
 # ---- 7. MODEL ----
-
-
 # Each person has their own baseline and their own rate of change over time
 # Estimate how large the effect of the intervention is on the rate of change over time
 # 1 What's happening on average?
@@ -284,29 +276,22 @@ summary(m)
 #confidence intervals for the fixed effects
 #confint(m)
 confint(m, parm = "beta_", method = "Wald")
+VarCorr(m)
+confint(m)
 ```
 
-### Fixed effects: truth vs estimate
-
-The model recovered the simulated values well: every estimate was within about one standard error of its true value. The key interaction was significant **(𝑝=9.5×10−9)**. The Training group’s estimated total monthly improvement was **0.58+0.96=1.540** points, close to the true value of **1.5**.
-
-Training participants improved faster than Control participants (time × group: **0.83** points per month, **95%** CI **[0.56, 1.11]**). Between-person SDs were **8.1 (95% CI [7.0, 9.3])** for baseline and about 0.4 for monthly change **(95% CI [0.00, 0.49])**; residual SD was **3.1 (95% CI [2.8, 3.5])**.
-
 ### Random effects: truth vs estimate
-
-The model recovered the simulated random-effect values well.
 
 $u_{0i}$: how much person $i$'s baseline differs from the average baseline.
 
 $u_{1i}$: how much person $i$'s monthly change differs from the average monthly change.
 
-The estimated variability in baseline scores, individual change rates, and measurement error was close to the true simulated values. The intercept–slope correlation of **0.12** is close to the true value of zero and is imprecise because each participant has only three measurements.
+The baseline SD (true 8) had a 95% CI of [7.0, 9.3] and the residual SD (true 3) had [2.8, 3.5], so both were recovered. The SD of individual change rates (true 0.5) had a CI of [0.00, 0.49], so it sits at the edge of what the data can detect with three waves. The intercept–slope correlation (true 0) had a CI of [-1, 1] and is not estimable here.
 
 The degrees of freedom are about **118** because the group comparison is based mainly on **120** participants, not on all **360** observations. One simulation is only one random sample; power requires repeating the simulation many times and calculating how often the intervention-by-time effect is detected.
 
-The interval for the slope SD (0.00 to 0.49) was close to zero, so the question is a real one here
-
 > Does estimating all this extra person-to-person slope variation meaningfully improve the model?
+
 
 ```{r model-comparison}
 # Simpler model: each person has their own baseline, but everyone shares the same rate of change
@@ -314,26 +299,34 @@ The interval for the slope SD (0.00 to 0.49) was close to zero, so the question 
 m_ri <- lmer(digital_skills ~ time_months * intervention + (1 | participant_id),
              data = DSTM_data)
 
-# Full model (m): own baseline AND own rate of change , with the correlation estimated.
-# m <- lmer(digital_skills ~ time_months * intervention + (time_months | participant_id), data = DSTM_data)
-
 anova(m_ri, m)
-
-# Middle model: each person has their own baseline AND their own rate of change, but the correlation is fixed at zero
-
-m_unc <- lmer(digital_skills ~ time_months * intervention + (1 | participant_id) + (0 + time_months | participant_id),
-              data = DSTM_data)
-
-anova(m_ri, m_unc, m)
-
-
 summary(m_ri)$coefficients
 summary(m)$coefficients
 ```
 
 Adding random slopes for time did not improve model fit (χ²(2) = 0.34, p = .845; AIC 2235.7 vs 2239.3). The time × group estimate and SE were nearly identical in the random-intercept and random-slope models. Because each participant has only three measurements, there is little information about individual differences in change. For simplicity and stability, we therefore use the random-intercept model (m_ri) in the power simulation.
 
-Coefficents estimate and SE are almost identical, the choice has little effect on our conclusion.
+
+```{r model-comparison-table}
+truth <- c("(Intercept)" = 40, "time_months" = 0.5,
+           "interventionTraining" = 0, "time_months:interventionTraining" = 1.0)
+ci <- confint(m_ri, parm = "beta_")
+
+tibble(term = names(truth), true = truth,
+       estimate = fixef(m_ri)[names(truth)],
+       lower = ci[names(truth), 1], upper = ci[names(truth), 2]) |>
+  mutate(covers_truth = true >= lower & true <= upper,
+         across(where(is.numeric), \(x) round(x, 2))) |>
+  knitr::kable()
+```
+
+
+### Fixed effects: truth vs estimate
+
+The time × group interaction was `r round(fixef(m_ri)["time_months:interventionTraining"], 2)` points per month (95% CI [`r round(ci["time_months:interventionTraining", 1], 2)`, `r round(ci["time_months:interventionTraining", 2], 2)`]), against a true value of 1.00.
+
+The Control-group slope (true 0.50) was estimated at 0.76 and its interval does not contain the true value. Among several 95% intervals in one sample, an occasional miss is expected, and part of the gap is the realised group difference in random slopes. The other terms were consistent with the true values.
+
 
 ### Model diagnostics
 
@@ -356,9 +349,12 @@ performance::check_model(
 )
 ```
 
+
 **Diagnostic guide.** Model assumptions were assessed visually using diagnostic plots. The Q-Q plots were used to assess the normality of residuals and random effects, while the linearity and homogeneity plots were inspected for systematic patterns and non-constant residual variance. Influential observations were examined separately because their observation labels are difficult to read in the combined diagnostic panel.
 
-### Power Simulation:
+Residuals showed no clear pattern against fitted values, supporting linearity and homoscedasticity. Q–Q plots of residuals and random intercepts were close to the diagonal, with only minor deviations in the extremes. Most observations had low leverage and residuals (blue points), with a few moderately influential cases (70, 152, 153, 166, 199, 292, 304) appearing as red points in the tails. Because the data were simulated from a correctly specified linear mixed model with normal errors, these small deviations reflect sampling variability rather than meaningful assumption violations. Normality holds by design.
+
+### Power Simulation
 
 All power simulations use the random-intercept model, because adding random slopes did not improve fit and yielded nearly identical fixed-effect estimates.
 
@@ -436,29 +432,6 @@ simulate_one <- function(
 }
 ```
 
-### Power Loop
-
-```{r power-simulation-loop}
-n_sim <- 1000
-
-sim_results <- map_dfr(
-1:n_sim,
-~ simulate_one(
-n_participants = 120,
-b_time_gr = 1.0,
-seed = 2026 + .x
-)
-)
-
-power_120 <- mean(sim_results$p_value < 0.05, na.rm = TRUE)
-
-power_120
-```
-
-Under the assumed data-generating conditions, all 1,000 simulated studies detected the time-by-intervention effect at α = .05, corresponding to an estimated power of 100%.
-
-> How does power change as I change the sample size and the true intervention effect?
-
 ### Effect Size
 
 >What power would my study have under each of these possible realities?
@@ -466,47 +439,45 @@ Under the assumed data-generating conditions, all 1,000 simulated studies detect
 We can change the true effect size of the intervention on the rate of change (b_time_gr) and the number of participants (n_participants) to see how power changes. The following code sets up a grid of different sample sizes and effect sizes, simulates data for each combination, and calculates the power for detecting the time-by-intervention interaction.
 
 ```{r effect-size}
-n_vals <- c(60, 120, 200)
-effect_vals <- c(0.25, 0.5, 1.0, 1.5)
+n_vals      <- c(60, 120, 200)
+effect_vals <- c(0.25, 0.5, 1.0, 1.5, 0) # 0 as false positive control expect 5%
 
-grid <- expand.grid(
-  n_participants = n_vals,
-  b_time_gr = effect_vals
-)
+grid <- expand.grid(n_participants = n_vals, b_time_gr = effect_vals)
 
-power_grid <- map_dfr(
-  1:nrow(grid),
-  function(i) {
-    row <- grid[i, ]
-    sims <- map_dfr(
-      1:1000,
-      ~ simulate_one(
-          n_participants = row$n_participants,
-          b_time_gr = row$b_time_gr,
-          seed = 3000 + i * 1000 + .x
-        )
-    )
-    tibble(
+power_file <- here("results", "power_grid.rds")
+
+if (file.exists(power_file)) {
+  power_grid <- readRDS(power_file)
+} else {
+  power_grid <- map_dfr(seq_len(nrow(grid)), function(i) {
+    row  <- grid[i, ]
+    sims <- map_dfr(1:1000, ~ simulate_one(
       n_participants = row$n_participants,
-      b_time_gr_true = row$b_time_gr,
-      power = mean(sims$p_value < 0.05, na.rm = TRUE)
-    )
-  }
-)
+      b_time_gr      = row$b_time_gr,
+      seed           = 3000 + i * 1000 + .x))
+    tibble(n_participants  = row$n_participants,
+           b_time_gr_true  = row$b_time_gr,
+           power           = mean(sims$p_value < 0.05, na.rm = TRUE))
+  })
+  dir.create(here("results"), showWarnings = FALSE)
+  saveRDS(power_grid, power_file)
+}
 ```
 
 
 **Power simulation.** Estimated power increased with both sample size and the magnitude of the time-by-group interaction. For a small interaction of 0.25 points/month, estimated power increased from 24.3% at N = 60 to 61.5% at N = 200 and remained below 80% across the examined sample sizes. For an interaction of 0.5 points/month, power increased from 63.8% at N = 60 to 91.4% at N = 120 and 99.0% at N = 200. Effects of 1.0 point/month or larger were detected in nearly all simulated studies, even at N = 60. Thus, the required sample size depends strongly on the smallest intervention effect the study aims to detect.
 
-N = 60 gives about 24% power for 0.25 points/month 
-N = 60 gives about 64% power for 0.5 points/month
-N = 60 gives about 100% power for 1.0 points/month
-N = 120 gives about 42% power for 0.25 points/month
-N = 120 gives about 91% power for 0.5 points/month
-N = 120 gives about 100% power for 1.0 points/month
-N = 200 gives about 62% power for 0.25 points/month
-N= 200 gives about 99% power for 0.5 points/month
-N = 200 gives about 100% power for 1.0 points/month
+With a true interaction of 0, the rejection rate was between `r round(100 * min(power_grid$power[power_grid$b_time_gr_true == 0]), 1)`% and `r round(100 * max(power_grid$power[power_grid$b_time_gr_true == 0]), 1)`%, close to the nominal 5%.
+
+
+```{r power-table}
+power_grid |>
+  mutate(power = round(100 * power, 1)) |>
+  pivot_wider(names_from = n_participants, values_from = power, names_prefix = "N = ") |>
+  arrange(b_time_gr_true) |>
+  knitr::kable(caption = "Estimated power (%) by true interaction (points/month) and sample size")
+```
+
 
 
 ### Power Curve
@@ -550,3 +521,11 @@ If the true intervention effect is 0.5 points/month, a study with 60 participant
 ## Design implications
 
 Based on these simulations, a study with N = 120 participants has high power to detect moderate intervention effects on the rate of change (≥ 0.5 points/month), but low power for very small effects (0.25 points/month). If the smallest substantively meaningful interaction is around 0.5 points/month, the current design (120 participants, three waves) is adequate. If smaller effects are of interest, either the sample size or the number of measurement occasions would need to be increased.
+
+## Limitations
+
+- All data are simulated with parameters chosen by the author, so power holds only under these assumptions.
+- The data were generated with person-specific slopes (SD = 0.5), but the power model omits random slopes. Here the interaction SE changes by only about 1%, but with larger slope variation the test would become too optimistic.
+- The design is balanced, with no dropout or missing data, equal spacing and normal errors.
+- With 1,000 simulations per condition, each power estimate has Monte Carlo error of up to about ±1.5 percentage points.
+- With three time points, individual differences in change are hard to detect, so the random-slope conclusion is weak.

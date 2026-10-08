@@ -28,6 +28,7 @@ A worked example of linear mixed-effects modelling for longitudinal data. It sta
 - `multilevel-longitudinal-analysis.html` – rendered report
 - `data/simulated_digital_skills_longitudinal.csv` – simulated dataset
 - `digital-skills-multilevel-analysis.Rproj` – RStudio project file (needed for `here()` paths)
+- `results/power_grid.rds` - power simulation results
 - `LICENSE` – MIT License
 
 ## Requirements
